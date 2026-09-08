@@ -47,6 +47,17 @@ public class ConfigLoader {
         return value;
     }
 
+    /**
+     * Returns the value of an optional property, falling back to the given default.
+     *
+     * @param key          property name
+     * @param defaultValue value to return when the property is not configured
+     * @return configured value, or {@code defaultValue} when the property is absent
+     */
+    private static String getProperty(String key, String defaultValue) {
+        return prop.getProperty(key, defaultValue);
+    }
+
     public static String getClientId() {
         return getProperty("oauth.client.id");
     }
@@ -77,10 +88,6 @@ public class ConfigLoader {
 
     public static String getOAuthState() {
         return getProperty("oauth.state");
-    }
-
-    public static String getOAuthNonce() {
-        return getProperty("oauth.nonce");
     }
 
     public static String getOAuthPrompt() {
@@ -134,5 +141,37 @@ public class ConfigLoader {
 
     public static String getIsBaseUrl() {
         return getProperty("is.base.url");
+    }
+
+    public static String getParUrl() {
+        return getProperty("oauth.par.url");
+    }
+
+    /**
+     * Returns the requested response mode, for example {@code jwt} to ask for a JARM response.
+     *
+     * @return the configured response mode, or null when the default response mode is wanted
+     */
+    public static String getResponseMode() {
+        return getProperty("oauth.response.mode", null);
+    }
+
+    /**
+     * Returns the name of the access token claim carrying the consent identifier. It must match
+     * the Identity Server's {@code consent_id_claim_name} configuration.
+     *
+     * @return the configured consent id claim name
+     */
+    public static String getConsentIdClaim() {
+        return getProperty("oauth.consent.id.claim", "consent_id");
+    }
+
+    /**
+     * Returns the value sent as the detached JWS signature header on a payment submission.
+     *
+     * @return the configured x-jws-signature header value
+     */
+    public static String getJwsSignature() {
+        return getProperty("openbanking.jws.signature");
     }
 }

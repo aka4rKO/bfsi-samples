@@ -169,6 +169,9 @@ const OAuthCallbackPage = () => {
     useEffect(() => {
         const params = getOAuthParams(location);
         const code = params.get("code") || params.get("authorization_code") || params.get("auth_code");
+        // With response_mode=jwt the whole authorization response is one signed JWT (JARM).
+        // The code lives inside it, so hand it to the backend to read.
+        const jarmResponse = params.get("response");
         const accessToken = params.get("access_token");
         const idToken = params.get("id_token");
         const errorParam = params.get("error") || params.get("error_description");
@@ -177,18 +180,21 @@ const OAuthCallbackPage = () => {
             setStatus("Failed to complete OAuth callback.");
             return;
         }
-        if (!code && !accessToken && !idToken) {
-            setError("No OAuth code or token was found in the callback URL.");
+        if (!code && !jarmResponse && !accessToken && !idToken) {
+            setError("No OAuth code, response JWT or token was found in the callback URL.");
             setStatus("Unable to complete OAuth callback.");
             return;
         }
         const completeAuth = async () => {
             try {
-                setStatus("Completing OAuth login with the authorization code...");
+                setStatus("Completing OAuth login with the authorization response...");
 
                 const backendBase = window.location.pathname.replace(/\/callback.*$/, "");
+                const authParam = jarmResponse
+                    ? `response=${encodeURIComponent(jarmResponse)}`
+                    : `code=${encodeURIComponent(code!)}`;
                 const response = await fetch(
-                    `${window.location.origin}${backendBase}/init/processAuth?code=${encodeURIComponent(code!)}`,
+                    `${window.location.origin}${backendBase}/init/processAuth?${authParam}`,
                     {method: "GET"}
                 );
                 if (!response.ok) {

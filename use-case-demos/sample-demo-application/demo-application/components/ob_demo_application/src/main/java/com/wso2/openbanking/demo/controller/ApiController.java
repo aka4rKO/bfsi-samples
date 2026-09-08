@@ -20,6 +20,8 @@ package com.wso2.openbanking.demo.controller;
 
 import com.wso2.openbanking.demo.constants.ApiConstants;
 import com.wso2.openbanking.demo.constants.OpenBankingConstants;
+import com.wso2.openbanking.demo.devconsole.FlowEntry;
+import com.wso2.openbanking.demo.devconsole.FlowLog;
 import com.wso2.openbanking.demo.exceptions.AuthorizationException;
 import com.wso2.openbanking.demo.exceptions.BankInfoLoadException;
 import com.wso2.openbanking.demo.exceptions.SSLContextCreationException;
@@ -31,6 +33,7 @@ import com.wso2.openbanking.demo.service.AuthService;
 import com.wso2.openbanking.demo.service.HttpTlsClient;
 import com.wso2.openbanking.demo.service.PaymentService;
 import com.wso2.openbanking.demo.utils.ConfigLoader;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +46,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.GET;
@@ -50,6 +55,7 @@ import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
+import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
@@ -58,6 +64,9 @@ import javax.ws.rs.core.Response;
 public final class ApiController {
 
     private static final Logger log = LoggerFactory.getLogger(ApiController.class);
+
+    @Context
+    private HttpServletRequest httpRequest;
 
     private AccountService accountService;
     private AuthService authService;
@@ -109,8 +118,9 @@ public final class ApiController {
         if (!initialized) {
             return serviceUnavailable();
         }
-        String redirectUrl = accountService.processAddAccount();
-        authService.setRequestStatus(ApiConstants.STATUS_ACCOUNTS);
+        HttpSession session = httpRequest.getSession(true);
+        String redirectUrl = accountService.processAddAccount(session);
+        authService.setRequestStatus(ApiConstants.STATUS_ACCOUNTS, session);
         return Response.ok(createRedirectResponse(redirectUrl)).build();
     }
 
@@ -127,26 +137,31 @@ public final class ApiController {
         if (!initialized) {
             return serviceUnavailable();
         }
-        String redirectUrl = paymentService.processPaymentRequest(payment);
-        authService.setRequestStatus(ApiConstants.STATUS_PAYMENTS);
+        HttpSession session = httpRequest.getSession(true);
+        String redirectUrl = paymentService.processPaymentRequest(payment, session);
+        authService.setRequestStatus(ApiConstants.STATUS_PAYMENTS, session);
         return Response.ok(createRedirectResponse(redirectUrl)).build();
     }
 
     /**
-     * Handles the OAuth callback and returns account or payment status.
+     * Handles the OAuth callback and returns account or payment status. The authorization
+     * response arrives either as a plain code or, when {@code response_mode=jwt} was requested,
+     * as a signed response JWT carrying the code.
      *
-     * @param code authorization code received from the OAuth callback
+     * @param code        authorization code received from the OAuth callback, if any
+     * @param responseJwt signed authorization response JWT (JARM), if any
      * @return 200 response with account or payment status, or 500 on authorization failure
      */
     @GET
     @Path("/processAuth")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response processAuth(@QueryParam("code") String code) throws IOException {
+    public Response processAuth(@QueryParam("code") String code,
+                                @QueryParam("response") String responseJwt) throws IOException {
         if (!initialized) {
             return serviceUnavailable();
         }
         try {
-            authService.processAuthorizationCallback(code);
+            authService.processAuthorizationCallback(code, responseJwt, httpRequest.getSession(true));
 
             String status = authService.getRequestStatus();
 
@@ -172,8 +187,10 @@ public final class ApiController {
 
         } catch (AuthorizationException e) {
             return Response.serverError()
-                    .entity("{\"" + ApiConstants.FIELD_STATUS + "\":\"" + ApiConstants.FIELD_ERROR
-                            + "\",\"message\":\"" + e.getMessage() + "\"}")
+                    .entity(new JSONObject()
+                            .put(ApiConstants.FIELD_STATUS, ApiConstants.FIELD_ERROR)
+                            .put("message", String.valueOf(e.getMessage()))
+                            .toString())
                     .build();
         } catch (IOException e) {
             throw new IOException(e);
@@ -217,6 +234,45 @@ public final class ApiController {
                     .entity("{\"" + ApiConstants.FIELD_ERROR + "\":\"" + e.getMessage() + "\"}")
                     .build();
         }
+    }
+
+    /**
+     * Returns the steps of the flow this browser has driven, for the developer console panel.
+     * It is deliberately not gated on initialization: when the application failed to start, the
+     * console is where one looks to find out how far a call got.
+     *
+     * @return 200 response with the recorded flow steps, oldest first
+     */
+    @GET
+    @Path("/dev-console")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response developerConsole() {
+        JSONArray entries = new JSONArray();
+        HttpSession session = httpRequest.getSession(false);
+        if (session != null) {
+            for (FlowEntry entry : FlowLog.of(session).snapshot()) {
+                entries.put(entry.toJson());
+            }
+        }
+        return Response.ok(new JSONObject().put("entries", entries).toString())
+                .header("Cache-Control", "no-store")
+                .build();
+    }
+
+    /**
+     * Clears the recorded flow steps, so the next flow can be demonstrated on its own.
+     *
+     * @return 200 response confirming the log was cleared
+     */
+    @DELETE
+    @Path("/dev-console")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response clearDeveloperConsole() {
+        HttpSession session = httpRequest.getSession(false);
+        if (session != null) {
+            FlowLog.of(session).clear();
+        }
+        return Response.ok("{\"" + ApiConstants.FIELD_STATUS + "\":\"cleared\"}").build();
     }
 
     /**
