@@ -90,8 +90,15 @@ public class ConfigLoader {
         return getProperty("oauth.state");
     }
 
+    /**
+     * Returns how the authorization server should prompt the customer, e.g. {@code login} to
+     * force re-authentication instead of reusing single sign on. Optional: with no value the
+     * choice is left to the server.
+     *
+     * @return the OIDC prompt value, or null when none is configured
+     */
     public static String getOAuthPrompt() {
-        return getProperty("oauth.prompt");
+        return getProperty("oauth.prompt", null);
     }
 
     public static String getResponseType() {
@@ -104,10 +111,6 @@ public class ConfigLoader {
 
     public static String getPaymentBaseUrl() {
         return getProperty("openbanking.payment.base.url");
-    }
-
-    public static String getFapiFinancialId() {
-        return getProperty("openbanking.fapi.financial.id");
     }
 
     public static String getCertificatePath() {

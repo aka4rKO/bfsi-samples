@@ -32,6 +32,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -50,6 +52,9 @@ public final class AuthService {
     private static final long   MILLIS_PER_SECOND       = 1000L;
 
     private static final String DEFAULT_REQUEST_STATUS = "accounts";
+
+    private static final String CLIENT_ASSERTION_TYPE =
+            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
     private static final String STEP_CALLBACK = "Authorization Callback";
     private static final String STEP_TOKEN    = "Token Exchange";
@@ -239,13 +244,16 @@ public final class AuthService {
      */
     private String buildTokenRequestBody(String code, String clientAssertion, HttpSession session) {
         LOG.debug("Building token request body for client ID: {}", ConfigLoader.getClientId());
-        String body = "grant_type=authorization_code" +
-                "&code=" + code +
-                "&scope=accounts openid" +
-                "&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" +
-                "&client_id=" + ConfigLoader.getClientId() +
-                "&client_assertion=" + clientAssertion +
-                "&redirect_uri=" + ConfigLoader.getRedirectUri();
+        // Parameters and order follow the reference implementation's Postman collection. It sends
+        // no scope: the access was described by authorization_details when the request was pushed,
+        // so asking again here is meaningless - and the value this used to send, "accounts", was a
+        // scope from the pre-initiated consent flow that the move to RAR removed.
+        String body = "grant_type=authorization_code"
+                + "&client_assertion_type=" + encode(CLIENT_ASSERTION_TYPE)
+                + "&client_assertion=" + encode(clientAssertion)
+                + "&redirect_uri=" + encode(ConfigLoader.getRedirectUri())
+                + "&client_id=" + encode(ConfigLoader.getClientId())
+                + "&code=" + encode(code);
 
         String codeVerifier = AuthFlowState.consumeCodeVerifier(session);
         if (codeVerifier == null) {
@@ -254,10 +262,14 @@ public final class AuthService {
                     + "be rejected.");
         } else {
             LOG.debug("Attaching PKCE code verifier to the token request.");
-            body = body + "&code_verifier=" + codeVerifier;
+            body = body + "&code_verifier=" + encode(codeVerifier);
         }
 
         return body;
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     /**

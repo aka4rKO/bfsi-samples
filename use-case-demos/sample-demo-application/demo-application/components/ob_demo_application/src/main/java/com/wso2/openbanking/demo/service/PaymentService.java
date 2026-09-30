@@ -30,7 +30,6 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Locale;
-import java.util.Random;
 import java.util.UUID;
 
 import javax.servlet.http.HttpSession;
@@ -38,7 +37,6 @@ import javax.servlet.http.HttpSession;
 /** Handles payment authorization via a Rich Authorization Request, and payment submission. */
 public final class PaymentService {
 
-    private static final Random RANDOM = new Random();
     private final OAuthTokenService oauthService;
     private final HttpTlsClient client;
 
@@ -194,7 +192,7 @@ public final class PaymentService {
     private JSONObject buildCreditorAccount(String[] payeeAccount) {
         return new JSONObject()
                 .put(OpenBankingConstants.FIELD_SCHEME_NAME, OpenBankingConstants.SCHEME_BBAN)
-                .put(OpenBankingConstants.FIELD_IDENTIFICATION, generateNumericId(14))
+                .put(OpenBankingConstants.FIELD_IDENTIFICATION, payeeAccount[1])
                 .put(OpenBankingConstants.FIELD_NAME, payeeAccount[0])
                 .put(OpenBankingConstants.FIELD_SECONDARY_IDENTIFICATION, OpenBankingConstants.PAYMENT_SECONDARY_ID_FIXED);
     }
@@ -259,36 +257,4 @@ public final class PaymentService {
                 + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Converts a hex character to a single numeric digit (0–9).
-     *
-     * @param c hex character to convert
-     * @return numeric digit derived from the hex character
-     */
-    private int hexCharToDigit(char c) {
-        if (c >= '0' && c <= '9') {
-            return c - '0';
-        }
-        int letterValue = (c >= 'a') ? (c - 'a') : (c - 'A');
-        return letterValue % 10;
-    }
-
-    /**
-     * Generates a numeric-only ID string of the given length using a UUID.
-     *
-     * @param length desired length of the numeric ID
-     * @return numeric ID string of exactly the specified length
-     */
-    private String generateNumericId(int length) {
-        String uuid = UUID.randomUUID().toString().replace("-", "");
-        StringBuilder numericId = new StringBuilder();
-        for (char c : uuid.toCharArray()) {
-            if (numericId.length() >= length) break;
-            numericId.append(hexCharToDigit(c));
-        }
-        while (numericId.length() < length) {
-            numericId.append(RANDOM.nextInt(10));
-        }
-        return numericId.substring(0, length);
-    }
 }

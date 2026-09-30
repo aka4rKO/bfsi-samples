@@ -19,7 +19,6 @@
 package com.wso2.openbanking.demo.controller;
 
 import com.wso2.openbanking.demo.constants.ApiConstants;
-import com.wso2.openbanking.demo.constants.OpenBankingConstants;
 import com.wso2.openbanking.demo.devconsole.FlowEntry;
 import com.wso2.openbanking.demo.devconsole.FlowLog;
 import com.wso2.openbanking.demo.exceptions.AuthorizationException;
@@ -300,25 +299,29 @@ public final class ApiController {
             List<Map<String, Object>> txnList = new ArrayList<>();
             if (acc.getTransactions() != null) {
                 for (Transaction txn : acc.getTransactions()) {
+                    // These are the names this application's own API uses, which are the ones the
+                    // frontend reads. The OpenBankingConstants.FIELD_* values are the *bank's*
+                    // PascalCase spellings, for parsing its payloads in the service layer - using
+                    // them here sent "TransactionId" where the caller looks for "id", so every
+                    // field but the date arrived empty.
                     Map<String, Object> t = new LinkedHashMap<>();
-                    t.put(OpenBankingConstants.FIELD_TRANSACTION_ID,         txn.getId());
-                    t.put("date",                                             txn.getDate());
-                    t.put(OpenBankingConstants.FIELD_REFERENCE,              txn.getReference());
-                    t.put(OpenBankingConstants.FIELD_ACCOUNT,                txn.getAccount());
-                    t.put(OpenBankingConstants.FIELD_AMOUNT,                 txn.getAmount());
-                    t.put(OpenBankingConstants.FIELD_CURRENCY,               txn.getCurrency());
-                    t.put(OpenBankingConstants.FIELD_CREDIT_DEBIT_INDICATOR, txn.getCreditDebitStatus());
+                    t.put("id",                 txn.getId());
+                    t.put("date",               txn.getDate());
+                    t.put("reference",          txn.getReference());
+                    t.put("account",            txn.getAccount());
+                    t.put("amount",             txn.getAmount());
+                    t.put("currency",           txn.getCurrency());
+                    t.put("creditDebitStatus",  txn.getCreditDebitStatus());
 
                     txnList.add(t);
                 }
             }
             Map<String, Object> a = new LinkedHashMap<>();
-            a.put("id",                                      acc.getId());
-            a.put(OpenBankingConstants.FIELD_NAME,           acc.getName());
-            a.put("balance",                                 acc.getBalance());
-            a.put(OpenBankingConstants.FIELD_CONSENT_ID,     acc.getConsentId());
-            a.put("transactions",                            txnList);
-            a.put("consentId", acc.getConsentId());
+            a.put("id",           acc.getId());
+            a.put("name",         acc.getName());
+            a.put("balance",      acc.getBalance());
+            a.put("consentId",    acc.getConsentId());
+            a.put("transactions", txnList);
             accountsList.add(a);
         }
 

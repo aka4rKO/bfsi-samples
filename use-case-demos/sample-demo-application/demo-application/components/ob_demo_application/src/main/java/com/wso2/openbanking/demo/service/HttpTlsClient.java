@@ -39,7 +39,6 @@ public final class HttpTlsClient {
     private static final String HEADER_CONTENT_TYPE  = "Content-Type";
     private static final String HEADER_ACCEPT        = "Accept";
     private static final String HEADER_AUTHORIZATION = "Authorization";
-    private static final String HEADER_FAPI_ID       = "x-fapi-financial-id";
     private static final String HEADER_IDEMPOTENCY   = "x-idempotency-key";
     private static final String HEADER_JWS_SIGNATURE = "x-jws-signature";
 
@@ -53,6 +52,7 @@ public final class HttpTlsClient {
     private static final String STEP_TOKEN     = "Token Exchange";
     private static final String STEP_PAR       = "Pushed Authorization Request";
     private static final String STEP_PAYMENT   = "Submit Payment";
+    private static final String STEP_REVOKE    = "Revoke Consent";
 
     private final String certPath;
     private final String keyPath;
@@ -85,11 +85,29 @@ public final class HttpTlsClient {
     }
 
     public String postAccessToken(String url, String body) throws IOException {
+        return postAccessToken(url, body, STEP_TOKEN);
+    }
+
+    /**
+     * Posts to the token endpoint, naming the step it represents in the developer console.
+     *
+     * <p>The endpoint serves more than one grant, and they are different steps to anyone reading
+     * the flow: an authorization code exchange completes a customer authorization, while a client
+     * credentials request does not involve a customer at all. Labelling both "Token Exchange"
+     * would hide that.
+     *
+     * @param url   token endpoint URL
+     * @param body  URL-encoded request body
+     * @param label step name shown in the developer console
+     * @return raw JSON response from the token endpoint
+     * @throws IOException if the request fails
+     */
+    public String postAccessToken(String url, String body, String label) throws IOException {
         return HttpConnection.post(url, sslContext)
                 .addHeader(HEADER_CONTENT_TYPE, MEDIA_FORM_URLENCODED)
                 .addHeader("Cache-Control", "no-cache")
                 .withBody(body)
-                .withLabel(STEP_TOKEN)
+                .withLabel(label)
                 .execute();
     }
 
@@ -110,15 +128,12 @@ public final class HttpTlsClient {
     }
 
     public String getWithAuth(String url, String token) throws IOException {
-        String fapiId = ConfigLoader.getFapiFinancialId();
         if (logger.isInfoEnabled()) {
             logger.info("Request send, {}", url);
         }
         String response = HttpConnection.get(url, sslContext)
-                .addHeader(HEADER_FAPI_ID, fapiId)
                 .addHeader(HEADER_AUTHORIZATION, BEARER_PREFIX + token)
                 .addHeader(HEADER_ACCEPT, MEDIA_JSON)
-                .addHeader(HEADER_CONTENT_TYPE, MEDIA_JSON_UTF8)
                 .withLabel(resourceStep(url))
                 .execute();
         if (logger.isInfoEnabled()) {
@@ -129,12 +144,10 @@ public final class HttpTlsClient {
 
     public String postPayments(String url, String body, String token) throws IOException {
         String idempotencyKey = UUID.randomUUID().toString();
-        String fapiId = ConfigLoader.getFapiFinancialId();
         if (logger.isInfoEnabled()) {
             logger.info("Payment request send, {}", url);
         }
         String response = HttpConnection.post(url, sslContext)
-                .addHeader(HEADER_FAPI_ID, fapiId)
                 .addHeader(HEADER_AUTHORIZATION, BEARER_PREFIX + token)
                 .addHeader(HEADER_ACCEPT, MEDIA_JSON)
                 .addHeader(HEADER_CONTENT_TYPE, MEDIA_JSON_UTF8)
@@ -156,6 +169,29 @@ public final class HttpTlsClient {
      * @param url resource URL being read
      * @return the step name, e.g. "Fetch Transactions"
      */
+    /**
+     * Deletes a consent, authenticating with a client credentials token.
+     *
+     * @param url   consent resource URL
+     * @param token client credentials access token
+     * @return true when the bank accepted the revocation
+     * @throws IOException if the request fails
+     */
+    public boolean deleteWithAuth(String url, String token) throws IOException {
+        if (logger.isInfoEnabled()) {
+            logger.info("Consent revocation request send, {}", url);
+        }
+        int status = HttpConnection.delete(url, sslContext)
+                .addHeader(HEADER_AUTHORIZATION, BEARER_PREFIX + token)
+                .addHeader(HEADER_ACCEPT, MEDIA_JSON)
+                .withLabel(STEP_REVOKE)
+                .executeAndGetStatus();
+        if (logger.isInfoEnabled()) {
+            logger.info("Consent revocation response received, status {}", status);
+        }
+        return status >= 200 && status < 300;
+    }
+
     private static String resourceStep(String url) {
         if (url.endsWith(OpenBankingConstants.PATH_TRANSACTIONS)) {
             return "Fetch Transactions";

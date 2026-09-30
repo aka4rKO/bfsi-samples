@@ -92,6 +92,7 @@ public final class OpenBankingConstants {
     public static final String SCOPE_OPENID = "openid";
 
     // URL path segments
+    public static final String PATH_CONSENTS          = "/consents";
     public static final String PATH_ACCOUNTS          = "/accounts";
     public static final String PATH_BALANCES          = "/balances";
     public static final String PATH_TRANSACTIONS      = "/transactions";

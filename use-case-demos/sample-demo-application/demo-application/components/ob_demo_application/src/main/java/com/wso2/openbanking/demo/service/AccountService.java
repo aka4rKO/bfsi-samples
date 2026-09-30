@@ -26,6 +26,8 @@ import com.wso2.openbanking.demo.models.Transaction;
 import com.wso2.openbanking.demo.utils.ConfigLoader;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -37,10 +39,11 @@ import java.util.List;
 
 import javax.servlet.http.HttpSession;
 
-import static org.reflections.Reflections.log;
 
 /** Handles account consent, data fetching, and consent revocation via the Open Banking API. */
 public final class AccountService {
+
+    private static final Logger LOG = LoggerFactory.getLogger(AccountService.class);
 
     private final HttpTlsClient client;
     private final OAuthTokenService oauthService;
@@ -155,6 +158,37 @@ public final class AccountService {
     }
 
     /**
+     * Fetches the display name of an account by its ID.
+     *
+     * <p>The nickname is what labels the account, so it is what the customer should see. The Name
+     * inside the nested Account array is the account *holder*, which is the same across every
+     * account someone owns, so it is only a fallback.
+     *
+     * @param accountId account ID to look up
+     * @return account name or a default value if not found
+     * @throws IOException if the API call fails
+     */
+    private String fetchAccountName(String accountId) throws IOException {
+        String url = accountUrl(accountId);
+        String response = client.getWithAuth(url, this.accessToken);
+        JSONObject accountDataNode = new JSONObject(response)
+                .getJSONObject(OpenBankingConstants.FIELD_DATA)
+                .getJSONArray(OpenBankingConstants.FIELD_ACCOUNT)
+                .getJSONObject(0);
+
+        String nickname = accountDataNode.optString(OpenBankingConstants.FIELD_NICKNAME, "");
+        if (!nickname.isEmpty()) {
+            return nickname;
+        }
+        if (accountDataNode.has(OpenBankingConstants.FIELD_ACCOUNT)) {
+            return accountDataNode.getJSONArray(OpenBankingConstants.FIELD_ACCOUNT)
+                    .getJSONObject(0)
+                    .optString(OpenBankingConstants.FIELD_NAME, OpenBankingConstants.DEFAULT_ACCOUNT_NAME);
+        }
+        return OpenBankingConstants.DEFAULT_STANDARD_ACCOUNT;
+    }
+
+    /**
      * Fetches full account details and transactions for each account ID.
      *
      * @param accountIds list of account IDs to fetch
@@ -175,27 +209,6 @@ public final class AccountService {
         return accounts;
     }
 
-    /**
-     * Fetches the display name of an account by its ID.
-     *
-     * @param accountId account ID to look up
-     * @return account name or a default value if not found
-     * @throws IOException if the API call fails
-     */
-    private String fetchAccountName(String accountId) throws IOException {
-        String url = accountUrl(accountId);
-        String response = client.getWithAuth(url, this.accessToken);
-        JSONObject accountDataNode = new JSONObject(response)
-                .getJSONObject(OpenBankingConstants.FIELD_DATA)
-                .getJSONArray(OpenBankingConstants.FIELD_ACCOUNT)
-                .getJSONObject(0);
-        if (accountDataNode.has(OpenBankingConstants.FIELD_ACCOUNT)) {
-            return accountDataNode.getJSONArray(OpenBankingConstants.FIELD_ACCOUNT)
-                    .getJSONObject(0)
-                    .optString(OpenBankingConstants.FIELD_NAME, OpenBankingConstants.DEFAULT_ACCOUNT_NAME);
-        }
-        return accountDataNode.optString(OpenBankingConstants.FIELD_NICKNAME, OpenBankingConstants.DEFAULT_STANDARD_ACCOUNT);
-    }
 
     /**
      * Fetches the current balance of an account by its ID.
@@ -321,10 +334,22 @@ public final class AccountService {
      * @throws Exception if the revocation request fails
      */
     public boolean revokeAccountConsent(String accountId, String bankName, String consentId) {
-        // The non-regulated Account Information API exposes no consent resource to delete: the
-        // consent is created during authorization, so there is nothing to call here. The linked
-        // accounts are dropped on the client side and the consent is left to expire.
-        log.info("Disconnecting accountId: {}, bankName: {}, consentId: {}", accountId, bankName, consentId);
-        return true;
+        if (consentId == null || consentId.isEmpty()) {
+            LOG.warn("No consent id given for accountId: {}, bankName: {}; nothing to revoke.",
+                    accountId, bankName);
+            return false;
+        }
+        String revokeUrl = ConfigLoader.getAccountBaseUrl()
+                + OpenBankingConstants.PATH_CONSENTS + "/" + consentId;
+        LOG.info("Revoking consent {} for accountId: {}, bankName: {}", consentId, accountId, bankName);
+        try {
+            // This call is made by the application rather than on behalf of the customer, so it
+            // carries a client credentials token, not the customer's access token.
+            String token = oauthService.getClientCredentialsToken();
+            return client.deleteWithAuth(revokeUrl, token);
+        } catch (GeneralSecurityException | IOException e) {
+            LOG.error("Failed to revoke consent {}: {}", consentId, e.getMessage(), e);
+            return false;
+        }
     }
 }

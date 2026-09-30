@@ -26,6 +26,10 @@ mvn clean package -DskipTests     # add -o to build offline
   `frontend/dist` into `src/main/webapp`. So **make UI changes in `frontend/src/`, never in
   `src/main/webapp/assets/*.js`** — those are build output. Old hashed bundles accumulate there
   and only the one named in `src/main/webapp/index.html` is loaded; the rest are dead files.
+- **`src/main/webapp/configurations/config.json` is build output too**, copied from
+  `frontend/public/configurations/config.json` by way of `frontend/dist`. Edit the one under
+  `frontend/public`. Editing the `src/main/webapp` copy appears to work and is then silently
+  reverted by the next build, which is easy to miss because both paths are tracked in git.
 - **SpotBugs runs at `compile` with `threshold=Low, effort=Max` and fails the build.** Expect it
   to reject storing an externally mutable object (`EI_EXPOSE_REP2` — copy defensively), a
   `Serializable` without `serialVersionUID`, and predictable randomness (use `SecureRandom`).
@@ -75,6 +79,31 @@ GET|POST <gateway>/open-banking/v1.0/{aisp,pisp}/...
   `client_credentials`, `accounts`/`payments` scopes) was removed deliberately — do not
   reintroduce it alongside RAR.
 
+The PAR body carries exactly five parameters - `request`, `client_assertion_type`, `client_id`,
+`client_assertion`, `authorization_details` - matching the reference implementation's Postman
+collection, which is the contract here. Everything else describing the authorization
+(`response_type`, `response_mode`, `redirect_uri`, `scope`, `nonce`, the PKCE code challenge,
+`prompt`) is a claim in the signed request object, so it is covered by the signature. Do not
+re-add a form parameter for something the request object already carries without a reason.
+
+The token request follows the collection too: `grant_type`, `client_assertion_type`,
+`client_assertion`, `redirect_uri`, `client_id`, `code`, `code_verifier`, all URL-encoded, and
+**no `scope`** - the access was described by `authorization_details` at the pushed request, so
+asking again is meaningless. The API calls send only `Authorization` and `Accept`; the
+`x-fapi-financial-id` header this used to add is a UK Open Banking header that neither the
+collection nor `account-info-openapi.yaml` knows about.
+
+`oauth.prompt=login` makes the Identity Server re-authenticate the customer on the consent
+redirect instead of reusing single sign on. It is the **one** parameter that must be pushed as a
+PAR form parameter rather than being a claim in the request object, and that is not a style
+choice: `OAuthParRequestWrapper` re-exposes pushed form parameters as request parameters at
+`/authorize`, whereas the request object is only mined for a known set of parameters that does
+not include `prompt`. Sent as a claim it is silently ignored - the session is reused and no login
+appears, verified on IS 7.3. As a pushed parameter it works, also verified. The reference
+collection uses `prompt` nowhere, so it offers no shape to follow here. The SPA sign in is
+deliberately left on single sign on, so one add-account run asks for credentials once rather than
+twice; `prompt` in `frontend/src/authConfig.ts` is what would change that.
+
 Config lives in `src/main/resources/application.properties`; `ConfigLoader` is the only reader.
 `obtransport.pem` / `obtransport.key` (mTLS) and `obsigning.key` (JWT signing) are classpath
 resources — **if you swap in local test certificates, do not commit them.**
@@ -116,28 +145,62 @@ frontend/src/components/dev-console/  the panel, polled only while it is open
 These are WSO2 IS / Carbon behaviours, each of which cost real debugging time. Changing the code
 to violate one of them will break the app in a way that does not point back here.
 
-1. **`META-INF/webapp-classloading.xml` must stay, requesting `Tomcat` only.** Carbon's default
-   for a webapp is `Carbon,CXF3` — the shared classloaders IS's *own* web applications use. This
-   app bundles its whole CXF stack, so sharing them lets its (unclean) CXF servlet shutdown
-   damage `authenticationendpoint`: after a few redeploys its JSPs stop compiling and the IS
-   console can no longer log in, while this app keeps working. Isolation avoids that; the WAR
-   needs nothing from Carbon.
-2. **No request path may end in a slash.** Carbon's `RequestNormalizationValve` 302-redirects any
+1. **Redeploying this app repeatedly breaks the Identity Server. Restart IS every few
+   redeploys.** This is the single most disruptive thing about developing against a webapp
+   deployed inside IS, and it is not a bug in this code.
+
+   Each redeploy leaves an unclean teardown behind. Carbon stops the context after the app's
+   archive is already gone, so the CXF servlet cannot shut down:
+
+   ```
+   ERROR ... Servlet [InitialDataJAXServlet] threw unload() exception
+   Caused by: java.lang.IllegalStateException: java.io.IOException: InvocationTargetException
+       at org.apache.catalina.webresources.AbstractSingleArchiveResourceSet.getArchiveEntry
+   ```
+
+   After enough of those, Carbon's bundle state goes stale and IS's *own* long-lived webapps end
+   up holding classloaders that cannot resolve classes they need. It has surfaced twice, in
+   different places, and each time only a restart cleared it:
+   - `authenticationendpoint`'s JSPs stop compiling, so the IS console can no longer log in.
+   - `/oauth2` throws `NoClassDefFoundError: org/wso2/carbon/identity/openidconnect/RequestObjectBuilder`,
+     so **`POST /oauth2/par` answers 500** and this app cannot start an authorization at all.
+     Verified on 2026-09-09: seven unload/reload cycles, then the next PAR call failed.
+
+   The second one is worth recognising on sight, because a 500 from the PAR endpoint looks exactly
+   like a malformed request. Check IS's `wso2carbon.log` for `RequestObjectBuilder` before
+   touching the request code.
+
+2. **`META-INF/webapp-classloading.xml` must stay, requesting `Tomcat` only** — but understand
+   what it does and does not do. Carbon's default is `Carbon,CXF3`, the shared classloaders IS's
+   own webapps use; this app bundles its whole CXF stack and calls no Carbon API, so it has no
+   business on them. Keep it for that reason. It does **not** prevent the damage in point 1:
+   the isolation was added to fix exactly that and the failure recurred with it in place, in both
+   the WAR and the deployed app. Do not treat it as a fix, and do not remove it expecting a
+   change either way.
+3. **No request path may end in a slash.** Carbon's `RequestNormalizationValve` 302-redirects any
    GET whose URI ends in `/`, and the API gateway then rejects the 302 as a response its schema
    does not define. Build resource URLs as `/accounts` and `/accounts/{id}`, never `/accounts/`.
    (`String.stripTrailing()` strips whitespace, not slashes — it will not save you.)
-3. **CXF instantiates `ApiController` per request** (`jaxrs.serviceClasses` →
+4. **CXF instantiates `ApiController` per request** (`jaxrs.serviceClasses` →
    `PerRequestResourceProvider`). An instance field cannot carry state between two HTTP
    requests, so anything that must survive the redirect to the authorization server — the PKCE
    code verifier, the pending payment, which flow is in progress — lives in the `HttpSession`
    via `AuthFlowState`. Never move it back into a field or a static.
-4. **Serving at the bare context root needs both** `SpaForwardServlet` mapped to `/*` (Carbon
+5. **Serving at the bare context root needs both** `SpaForwardServlet` mapped to `/*` (Carbon
    redirects `/ctx/` → `/ctx` and Tomcat redirects `/ctx` → `/ctx/`, which loops unless a
-   servlet claims the root) **and absolute asset URLs** (`vite.config.ts` `base` and
-   `api.ts` `baseUrl`), because at the slash-less root a relative `./assets/…` resolves against
-   the server root. Static directories are mapped back to the container `default` servlet in
-   `web.xml`; keep those mappings in step with the folders under `src/main/webapp`.
-5. **IS's `AuthenticationValve` is fail-closed**: a URI with no matching
+   servlet claims the root) **and absolute asset URLs** (`vite.config.ts` `base`,
+   `api.ts` `baseUrl`, and `resolveAssetUrl` for the paths inside `configurations/config.json`),
+   because at the slash-less root a relative `./assets/…` resolves against the server root.
+   A relative URL that is read by the browser *after* the router has moved to a deeper route
+   resolves correctly, so this failure looks intermittent - an image that appears on a reload of
+   `/accounts-central` but not when entering at the context root. Anything new that names a file
+   must go through `resolveAssetUrl` and nothing else. `config.json`'s paths are anchored once,
+   where the file is fetched, so a page that prefixes a base path of its own on top of that
+   yields `/api-ob-demo-1.0.0/api-ob-demo-1.0.0/…` and a broken image: there is one resolver by
+   design, and `add-accounts-page.tsx` had a second one that had to go. Static directories are mapped
+   back to the container `default` servlet in `web.xml`; keep those mappings in step with the
+   folders under `src/main/webapp`.
+6. **IS's `AuthenticationValve` is fail-closed**: a URI with no matching
    `[[resource.access_control]]` entry returns 401, not 404. The server-side rule must cover the
    bare context root, e.g. `context = "(.*)/api-ob-demo-1.0.0(/.*)?"`.
 

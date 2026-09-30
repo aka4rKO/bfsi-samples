@@ -22,6 +22,7 @@ import {Box} from "@oxygen-ui/react";
 import useConfigContext from "../hooks/use-config-context.ts";
 import type {Config} from "../hooks/config-interfaces.ts";
 import {queryClient} from "../utility/query-client.ts";
+import {generateTransactionId} from "../utility/transaction-utils.ts";
 
 const ACCOUNTS_SESSION_KEY = "openbanking_added_accounts";
 
@@ -125,15 +126,21 @@ const handlePaymentsResponse = (data: any) => {
     const savedAccountsRaw = sessionStorage.getItem(ACCOUNTS_SESSION_KEY);
     const savedAccounts: any[] = savedAccountsRaw ? JSON.parse(savedAccountsRaw) : [];
 
+    // Use the shared generator rather than a timestamp, so the id matches the T + 8 digit shape
+    // the rest of the data uses, and is checked against the ids already present.
+    const existingTransactions = savedAccounts.flatMap((acc: any) => acc.transactions || []);
+
     const newTxn = {
-        id: `T${Date.now()}`,
+        id: generateTransactionId(existingTransactions),
         date: currentDate,
         reference: pending.reference,
         bank: oldConfig.banks[2]?.name ?? "",
         account: accountId,
         amount: pending.amount,
         currency: pending.currency,
-        creditDebitStatus: "c"
+        // A payment sends money out of the account, so it is a debit - which is also what the
+        // balance below assumes when it subtracts the amount.
+        creditDebitStatus: "d"
     };
 
     // Update the accounts from sessionStorage directly
